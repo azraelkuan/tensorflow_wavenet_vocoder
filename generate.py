@@ -15,9 +15,17 @@ from hparams import hparams
 
 LOGDIR = './logdir'
 SAVE_EVERY = None
+TEMPERATURE = 1.0
 
 
 def get_arguments():
+
+    def _ensure_positive_float(f):
+        """Ensure argument is a positive float."""
+        if float(f) < 0:
+            raise argparse.ArgumentTypeError(
+                    'Argument must be greater than zero')
+        return float(f)
 
     parser = argparse.ArgumentParser(description='WaveNet generation script')
     parser.add_argument(
@@ -28,6 +36,11 @@ def get_arguments():
         default=LOGDIR,
         help='Directory in which to store the logging '
         'information for TensorBoard.')
+    parser.add_argument(
+        '--temperature',
+        type=_ensure_positive_float,
+        default=TEMPERATURE,
+        help='Sampling temperature')
     parser.add_argument(
         '--wav_out_path',
         type=str,
@@ -44,9 +57,9 @@ def get_arguments():
         default=None,
         help='The wav file to start generation from')
     parser.add_argument(
-        '--eval_file',
+        '--eval_txt',
         type=str,
-        default="./eavl.txt",
+        default="~/Downloads/training/eavl.txt",
         help="the eval txt"
     )
 
@@ -93,10 +106,23 @@ def main():
         local_condition_channel=hparams.local_condition_dim
     )
 
-    samples = tf.placeholder(tf.int32)
-    local_condition = tf.placeholder(tf.float32, shape=(1, hparams.local_condition_dim))
+    eval_list = []
+    with open(args.eval_txt, 'r', encoding='utf-8') as f:
+        lines = f.readlines()
+        for line in lines:
+            eval_list.append(line.strip())
 
-    next_sample = net.predict_proba_incremental(samples, local_condition)
+    local_condition_data = np.load(eval_list[0])
+    local_condition = []
+    for i in range(local_condition_data.shape[0]):
+        for _ in range(int(hparams.frame_period * hparams.sample_rate / 1000)):
+            local_condition.append(local_condition_data[i, 0:hparams.local_condition_dim])
+    local_condition = np.asarray(local_condition)
+
+    samples = tf.placeholder(tf.int32)
+    local_ph = tf.placeholder(tf.float32, shape=(1, hparams.local_condition_dim))
+
+    next_sample = net.predict_proba_incremental(samples, local_ph)
 
     sess.run(tf.global_variables_initializer())
     sess.run(net.init_ops)
@@ -132,24 +158,19 @@ def main():
         for i, x in enumerate(waveform[-net.receptive_field: -1]):
             if i % 100 == 0:
                 print('Priming sample {}'.format(i))
-            sess.run(outputs, feed_dict={samples: x})
+            sess.run(outputs, feed_dict={samples: x, local_ph: local_condition[i:i+1, :]})
         print('Done.')
 
+    sample_len = local_condition.shape[0]
     last_sample_timestamp = datetime.now()
-    for step in range(args.samples):
-        if args.fast_generation:
-            outputs = [next_sample]
-            outputs.extend(net.push_ops)
-            window = waveform[-1]
-        else:
-            if len(waveform) > net.receptive_field:
-                window = waveform[-net.receptive_field:]
-            else:
-                window = waveform
-            outputs = [next_sample]
+    for step in range(sample_len):
+
+        outputs = [next_sample]
+        outputs.extend(net.push_ops)
+        window = waveform[-1]
 
             # Run the WaveNet to predict the next sample.
-        prediction = sess.run(outputs, feed_dict={samples: window})[0]
+        prediction = sess.run(outputs, feed_dict={samples: window, local_ph: local_condition[step:step+1, :]})[0]
 
         # Scale prediction distribution using temperature.
         np.seterr(divide='ignore')
@@ -166,7 +187,7 @@ def main():
         current_sample_timestamp = datetime.now()
         time_since_print = current_sample_timestamp - last_sample_timestamp
         if time_since_print.total_seconds() > 1.:
-            print('Sample {:3<d}/{:3<d}'.format(step + 1, args.samples),
+            print('Sample {:3<d}/{:3<d}'.format(step + 1, sample_len),
                   end='\r')
             last_sample_timestamp = current_sample_timestamp
 

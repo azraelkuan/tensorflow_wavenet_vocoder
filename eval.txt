@@ -1,0 +1,1 @@
+/home/kc430/Downloads/training/ljspeech-cmp-13100.npy

@@ -258,15 +258,18 @@ class WaveNetModel(object):
         if local_condition is not None:
             weights_lc_filter = variables['lc_filter_weights']
             weights_lc_gate = variables['lc_gate_weights']
-
-            output_filter = output_filter + tf.nn.conv1d(local_condition,
-                                                         weights_lc_filter,
-                                                         stride=1,
-                                                         padding='SAME')
-            output_gate = output_gate + tf.nn.conv1d(local_condition,
-                                                     weights_lc_gate,
-                                                     stride=1,
-                                                     padding='SAME')
+            local_filter = tf.nn.conv1d(local_condition,
+                                        weights_lc_filter,
+                                        padding='SAME',
+                                        stride=1)
+            local_gate = tf.nn.conv1d(local_condition,
+                                      weights_lc_gate,
+                                      padding='SAME',
+                                      stride=1)
+            local_filter = tf.squeeze(local_filter, [1])
+            local_gate = tf.squeeze(local_gate, [1])
+            output_filter += local_filter
+            output_gate += local_gate
 
         if self.use_biases:
             output_filter = output_filter + variables['filter_bias']
