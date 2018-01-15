@@ -25,7 +25,10 @@ def randomize_file(files):
 
 
 def load_npy_data(metadata_filename):
+    # print("Loading data...", end="")
     files = get_file_list(metadata_filename)
+    # print("Done!")
+    # print("File length:{}".format(len(files)))
     random_files = randomize_file(files)
     for each in random_files:
         fs, audio = wavfile.read(each[0])
@@ -44,7 +47,6 @@ def load_npy_data(metadata_filename):
 
 
 class DataFeeder(object):
-
     def __init__(self, metadata_filename, coord, receptive_field, sample_size=None, queue_size=32):
         self.metadata_filename = metadata_filename
         self.coord = coord
@@ -60,9 +62,9 @@ class DataFeeder(object):
         ]
 
         self.queue = tf.PaddingFIFOQueue(self.queue_size,
-                                  [tf.float32, tf.float32],
-                                  shapes=[(None, 1), (None, hparams.local_condition_dim)],
-                                  name='input_queue')
+                                         [tf.float32, tf.float32],
+                                         shapes=[(None, 1), (None, hparams.local_condition_dim)],
+                                         name='input_queue')
 
         self.enqueue = self.queue.enqueue(self._placeholders)
 
@@ -90,10 +92,10 @@ class DataFeeder(object):
 
                 if self.sample_size:
                     while len(audio) > self.receptive_field:
-                        audio_piece = audio[:(self.receptive_field+self.sample_size), :]
+                        audio_piece = audio[:(self.receptive_field + self.sample_size), :]
                         audio = audio[self.sample_size:, :]
 
-                        local_condition_piece = local_condition[:(self.receptive_field+self.sample_size), :]
+                        local_condition_piece = local_condition[:(self.receptive_field + self.sample_size), :]
                         local_condition = local_condition[self.sample_size:, :]
 
                         sess.run(self.enqueue, feed_dict=

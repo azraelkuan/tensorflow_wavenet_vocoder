@@ -35,7 +35,8 @@ def build_from_path(in_dir, out_dir, num_workers=1, tqdm=lambda x:x):
 def _process_utterance(out_dir, index, wav_path, text):
     features = get_mgc_lf0_uv_bap(wav_path)
     n_frames = features.shape[1]
-    cmp_file_name = 'ljspeech-cmp-%05d.npy' % index
+    wav_id = wav_path.split("/")[-1].split(".")[0]
+    cmp_file_name = '{}.npy'.format(wav_id)
     np.save(os.path.join(out_dir, cmp_file_name), features, allow_pickle=False)
     return os.path.join(out_dir, cmp_file_name), n_frames, wav_path
 

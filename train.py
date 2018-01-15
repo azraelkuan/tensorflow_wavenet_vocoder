@@ -7,7 +7,7 @@ import time
 from datetime import datetime
 
 import tensorflow as tf
-from tensorflow.python.client import timeline
+from tqdm import tqdm
 
 from model import WaveNetModel, optimizer_factory
 from datasets.data_feeder import DataFeeder
@@ -18,16 +18,17 @@ from hparams import hparams
 BATCH_SIZE = 1
 TRAIN_TXT = "/home/kc430/Downloads/training/train.txt"
 LOGDIR_ROOT = './logdir'
-CHECKPOINT_EVERY = 50
+CHECKPOINT_EVERY = 1000
 NUM_STEPS = int(1e5)
 LEARNING_RATE = 1e-3
 STARTED_DATE_STRING = "{0:%Y-%m-%dT%H-%M-%S}".format(datetime.now())
-SAMPLE_SIZE = 20000
+SAMPLE_SIZE = 50000
 L2_REGULARIZATION_STRENGTH = 0
 EPSILON = 0.001
 MOMENTUM = 0.9
 MAX_TO_KEEP = 5
 METADATA = False
+PRINT_LOSS_EVERY = 500
 
 
 def get_arguments():
@@ -80,11 +81,10 @@ def get_arguments():
                         'adam optimizer. Default: ' + str(MOMENTUM) + '.')
     parser.add_argument('--histograms', type=bool, default=False,
                         help='Whether to store histogram summaries. Default: False')
-    parser.add_argument('--gc_channels', type=int, default=None,
-                        help='Number of global condition channels. Default: None. Expecting: Int')
     parser.add_argument('--max_checkpoints', type=int, default=MAX_TO_KEEP,
                         help='Maximum amount of checkpoints that will be kept alive. Default: '
                              + str(MAX_TO_KEEP) + '.')
+    parser.add_argument('--num_gpus', type=int, default=4, help="the number of gpu")
     return parser.parse_args()
 
 
@@ -98,7 +98,7 @@ def save(saver, sess, logdir, step):
         os.makedirs(logdir)
 
     saver.save(sess, checkpoint_path, global_step=step)
-    print(' Done.')
+    print('Done.')
 
 
 def load(saver, sess, logdir):
@@ -167,6 +167,29 @@ def validate_directories(args):
     }
 
 
+def average_gradients(tower_grads):
+    average_grads = []
+    for grad_and_vars in zip(*tower_grads):
+        grads = []
+        for g, _ in grad_and_vars:
+            if g is None:
+                continue
+            expanded_g = tf.expand_dims(g, 0)
+            grads.append(expanded_g)
+
+        if len(grads) == 0:
+            average_grads.append((None, v))
+            continue
+
+        grad = tf.concat(axis=0, values=grads)
+        grad = tf.reduce_mean(grad, 0)
+
+        v = grad_and_vars[0][1]
+        grad_and_var = (grad, v)
+        average_grads.append(grad_and_var)
+    return average_grads
+
+
 def main():
     args = get_arguments()
 
@@ -195,7 +218,6 @@ def main():
             ),
             sample_size=args.sample_size
         )
-        audio_batch, lc_batch = reader.dequeue(args.batch_size)
 
     net = WaveNetModel(
         batch_size=args.batch_size,
@@ -215,32 +237,69 @@ def main():
     if args.l2_regularization_strength == 0:
         args.l2_regularization_strength = None
 
-    loss = net.loss(input_batch=audio_batch,
-                    local_condtion=lc_batch,
-                    l2_regularization_strength=args.l2_regularization_strength)
-
     trainable = tf.trainable_variables()
 
-    optimizer = optimizer_factory[args.optimizer](
-        learning_rate=args.learning_rate,
-        momentum=args.momentum)
-    optim = optimizer.minimize(loss, var_list=trainable)
-
-    sess = tf.Session(config=tf.ConfigProto(log_device_placement=False))
-    init = tf.global_variables_initializer()
-    sess.run(init)
-
+    sess = tf.Session(config=tf.ConfigProto(log_device_placement=False, allow_soft_placement=True,
+                                            gpu_options=tf.GPUOptions(allow_growth=True)))
     saver = tf.train.Saver(var_list=tf.trainable_variables(), max_to_keep=args.max_checkpoints)
-
+    # get global step
     try:
         saved_global_step = load(saver, sess, restore_from)
         if is_overwritten_training or saved_global_step is None:
-            saved_global_step = -1
+            saved_global_step = 0
     except:
         print("Something went wrong while restoring checkpoint. "
               "We will terminate training to avoid accidentally overwriting "
               "the previous model.")
         raise
+
+    global_step = tf.get_variable(
+        'global_step', [],
+        initializer=tf.constant_initializer(saved_global_step), trainable=False)
+
+    # decay learning rate
+    # Calculate the learning rate schedule.
+    decay_steps = hparams.NUM_STEPS_RATIO_PER_DECAY * args.num_steps
+    # Decay the learning rate exponentially based on the number of steps.
+    lr = tf.train.exponential_decay(args.learning_rate,
+                                    global_step,
+                                    decay_steps,
+                                    hparams.LEARNING_RATE_DECAY_FACTOR,
+                                    staircase=True)
+
+    optimizer = optimizer_factory[args.optimizer](
+        learning_rate=lr,
+        momentum=args.momentum)
+
+    mul_batch_size = args.batch_size*args.num_gpus
+    audio_batch, lc_batch = reader.dequeue(mul_batch_size)
+
+    split_audio_batch = tf.split(value=audio_batch, num_or_size_splits=args.num_gpus, axis=0)
+    split_lc_batch = tf.split(value=lc_batch, num_or_size_splits=args.num_gpus, axis=0)
+
+    # support multi gpu train
+    tower_grads = []
+    tower_losses = []
+    with tf.variable_scope(tf.get_variable_scope()):
+        for i in range(args.num_gpus):
+            with tf.device('/gpu:{}'.format(i)):
+                with tf.name_scope('losstower_{}'.format(i)) as scope:
+                    loss = net.loss(input_batch=split_audio_batch[i],
+                                    local_condtion=split_lc_batch[i],
+                                    l2_regularization_strength=args.l2_regularization_strength)
+                    tf.get_variable_scope().reuse_variables()
+                    tower_losses.append(loss)
+                    grad_vars = optimizer.compute_gradients(loss, var_list=trainable)
+                    tower_grads.append(grad_vars)
+    if args.num_gpus == 1:
+        optim = optimizer.minimize(loss, var_list=trainable, global_step=global_step)
+    else:
+        loss = tf.reduce_mean(tower_losses)
+        avg_grad = average_gradients(tower_grads)
+        optim = optimizer.apply_gradients(avg_grad, global_step=global_step)
+
+    init = tf.global_variables_initializer()
+    sess.run(init)
 
     threads = tf.train.start_queue_runners(sess=sess, coord=coord)
     reader.start_threads(sess)
@@ -249,21 +308,26 @@ def main():
     last_saved_step = saved_global_step
 
     try:
-        for step in range(saved_global_step + 1, args.num_steps):
-            start_time = time.time()
-            loss_value, _ = sess.run([loss, optim])
+        print_loss = 0.
+        start_time = time.time()
+        for step in tqdm(range(saved_global_step, args.num_steps), desc="Step"):
 
-            duration = time.time() - start_time
-            print('step {:d} - loss = {:.3f}, ({:.3f} sec/step)'
-                  .format(step, loss_value, duration))
+            loss_value, _ = sess.run([loss, optim])
+            # tqdm.write("{}".format(loss_value))
+            print_loss += loss_value
+
+            if step % PRINT_LOSS_EVERY == 0:
+                duration = time.time() - start_time
+                tqdm.write('step {:d} - loss = {:.3f}, ({:.3f} sec/step)'.format(
+                    step, print_loss/PRINT_LOSS_EVERY, duration/PRINT_LOSS_EVERY))
+                start_time = time.time()
+                print_loss = 0.
 
             if step % args.checkpoint_every == 0:
                 save(saver, sess, logdir, step)
                 last_saved_step = step
 
     except KeyboardInterrupt:
-        # Introduce a line break after ^C is displayed so save message
-        # is on its own line.
         print()
     finally:
         if step > last_saved_step:
