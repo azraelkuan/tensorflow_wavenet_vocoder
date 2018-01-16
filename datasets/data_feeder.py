@@ -3,19 +3,26 @@ import tensorflow as tf
 import threading
 import random
 import numpy as np
-from scipy.io import wavfile
-from hparams import hparams
+import os
+import audio
 
 
-def get_file_list(metadata_filename):
+def get_file_list(metadata_filename, npy_dataroot):
     files = []
     with open(metadata_filename, 'r', encoding='utf-8') as f:
         lines = f.readlines()
         for line in lines:
             line = line.strip().split("|")
-            local_condition_path = line[0]
-            wav_path = line[2]
-            files.append((wav_path, local_condition_path))
+            local_condition_path = line[1]
+            wav_path = line[0]
+            local_condition_path = os.path.join(npy_dataroot, local_condition_path)
+            wav_path = os.path.join(npy_dataroot, wav_path)
+            if len(line) == 5:
+                global_condition = int(line[4])
+            else:
+                global_condition = None
+
+            files.append((wav_path, local_condition_path, global_condition))
     return files
 
 
@@ -24,35 +31,35 @@ def randomize_file(files):
     yield random_file
 
 
-def load_npy_data(metadata_filename):
+def load_npy_data(metadata_filename, npy_dataroot):
     # print("Loading data...", end="")
-    files = get_file_list(metadata_filename)
+    files = get_file_list(metadata_filename, npy_dataroot)
     # print("Done!")
     # print("File length:{}".format(len(files)))
     random_files = randomize_file(files)
     for each in random_files:
-        fs, audio = wavfile.read(each[0])
-        audio = audio.reshape(-1, 1)
 
-        origin_local_condtion = np.load(each[1])
-        expand_local_condition = []
-        # do expand
-        for i in range(origin_local_condtion.shape[0]):
-            for _ in range(int(hparams.frame_period * fs / 1000)):
-                expand_local_condition.append(origin_local_condtion[i, 0:hparams.local_condition_dim])
+        wav = np.load(each[0])
+        local_condition = np.load(each[1])
+        global_condition = each[2]
 
-        local_condition = np.array(expand_local_condition)
+        wav, local_condition = audio.adjust_time_resolution(wav, local_condition)
 
-        yield audio, local_condition
+        wav = wav.reshape(-1, 1)
+        yield wav, local_condition, global_condition
 
 
 class DataFeeder(object):
-    def __init__(self, metadata_filename, coord, receptive_field, sample_size=None, queue_size=32):
+    def __init__(self, metadata_filename, coord, receptive_field, gc_enable=False,
+                 sample_size=None, queue_size=32, npy_dataroot=None, num_mels=None):
         self.metadata_filename = metadata_filename
         self.coord = coord
         self.receptive_field = receptive_field
         self.sample_size = sample_size
         self.queue_size = queue_size
+        self.gc_enable = gc_enable
+        self.npy_dataroot = npy_dataroot
+        self.num_mels = num_mels
 
         self.threads = []
 
@@ -60,11 +67,17 @@ class DataFeeder(object):
             tf.placeholder(tf.float32, shape=None),
             tf.placeholder(tf.float32, shape=None)
         ]
-
         self.queue = tf.PaddingFIFOQueue(self.queue_size,
                                          [tf.float32, tf.float32],
-                                         shapes=[(None, 1), (None, hparams.local_condition_dim)],
+                                         shapes=[(None, 1), (None, self.num_mels)],
                                          name='input_queue')
+
+        if self.gc_enable:
+            self._placeholders.append(tf.placeholder(tf.int32, shape=None))
+            self.queue = tf.PaddingFIFOQueue(self.queue_size,
+                                             [tf.float32, tf.float32, tf.int32],
+                                             shapes=[(None, 1), (None, self.num_mels), ()],
+                                             name='input_queue')
 
         self.enqueue = self.queue.enqueue(self._placeholders)
 
@@ -75,8 +88,8 @@ class DataFeeder(object):
     def thread_main(self, sess):
         stop = False
         while not stop:
-            iterator = load_npy_data(self.metadata_filename)
-            for audio, local_condition in iterator:
+            iterator = load_npy_data(self.metadata_filename, self.npy_dataroot)
+            for audio, local_condition, global_condition in iterator:
                 if self.coord.should_stop():
                     stop = True
                     break
@@ -98,10 +111,18 @@ class DataFeeder(object):
                         local_condition_piece = local_condition[:(self.receptive_field + self.sample_size), :]
                         local_condition = local_condition[self.sample_size:, :]
 
-                        sess.run(self.enqueue, feed_dict=
-                        dict(zip(self._placeholders, (audio_piece, local_condition_piece))))
+                        if self.gc_enable:
+                            sess.run(self.enqueue, feed_dict=
+                            dict(zip(self._placeholders, (audio_piece, local_condition_piece, global_condition))))
+                        else:
+                            sess.run(self.enqueue, feed_dict=
+                            dict(zip(self._placeholders, (audio_piece, local_condition_piece))))
                 else:
-                    sess.run(self.enqueue, feed_dict=dict(zip(self._placeholders, (audio, local_condition))))
+                    if self.gc_enable:
+                        sess.run(self.enqueue, feed_dict=dict(zip(
+                            self._placeholders, (audio, local_condition, global_condition))))
+                    else:
+                        sess.run(self.enqueue, feed_dict=dict(zip(self._placeholders, (audio, local_condition))))
 
     def start_threads(self, sess, n_threads=1):
         for _ in range(n_threads):

@@ -3,15 +3,17 @@
 import argparse
 from datetime import datetime
 import os
+import audio
 
 import librosa
 import numpy as np
 import tensorflow as tf
 
-from model import WaveNetModel, mu_law_encode, mu_law_decode
-from datasets.data_feeder import DataFeeder
+from model import WaveNetModel
 from hparams import hparams
+import nnmnkwii.preprocessing as P
 
+from tqdm import tqdm
 
 LOGDIR = './logdir'
 SAVE_EVERY = None
@@ -62,6 +64,18 @@ def get_arguments():
         default="~/Downloads/training/eavl.txt",
         help="the eval txt"
     )
+    parser.add_argument(
+        '--hparams',
+        type=str,
+        default=None,
+        help="the override hparams"
+    )
+    parser.add_argument(
+        '--gc_id',
+        type=int,
+        default=0,
+        help='the global condition'
+    )
 
     arguments = parser.parse_args()
     return arguments
@@ -79,7 +93,8 @@ def create_seed(filename,
                 window_size):
     audio, _ = librosa.load(filename, sr=sample_rate, mono=True)
 
-    quantized = mu_law_encode(audio, quantization_channels)
+    # quantized = mu_law_encode(audio, quantization_channels)
+    quantized = P.mulaw_quantize(audio, quantization_channels)
     cut_index = tf.cond(tf.size(quantized) < tf.constant(window_size),
                         lambda: tf.size(quantized),
                         lambda: tf.constant(window_size))
@@ -89,8 +104,13 @@ def create_seed(filename,
 
 def main():
     args = get_arguments()
+    if args.hparams is not None:
+        hparams.parse(args.hparams)
+    hparams.global_cardinality = None if hparams.global_cardinality == 0 else hparams.global_cardinality
+    hparams.global_channel = None if hparams.global_channel == 0 else hparams.global_channel
+    print(hparams)
 
-    sess = tf.Session()
+    sess = tf.Session(config=tf.ConfigProto(log_device_placement=False, gpu_options=tf.GPUOptions(allow_growth=True)))
 
     net = WaveNetModel(
         batch_size=1,
@@ -103,26 +123,36 @@ def main():
         use_biases=hparams.use_biases,
         scalar_input=hparams.scalar_input,
         initial_filter_width=hparams.initial_filter_width,
-        local_condition_channel=hparams.local_condition_dim
+        local_condition_channel=hparams.num_mels,
+        global_cardinality=hparams.global_cardinality,
+        global_channel=hparams.global_channel
     )
 
-    eval_list = []
+    local_condition = None
+    if hparams.global_channel is not None:
+        gc_id = args.gc_id
+    else:
+        gc_id = None
+
     with open(args.eval_txt, 'r', encoding='utf-8') as f:
         lines = f.readlines()
-        for line in lines:
-            eval_list.append(line.strip())
+        for line in lines[0:1]:
+            if line is not None:
+                line = line.strip().split('|')
+                npy_path = os.path.join(hparams.NPY_DATAROOT, line[1])
+                local_condition = np.load(npy_path)
 
-    local_condition_data = np.load(eval_list[0])
-    local_condition = []
-    for i in range(local_condition_data.shape[0]):
-        for _ in range(int(hparams.frame_period * hparams.sample_rate / 1000)):
-            local_condition.append(local_condition_data[i, 0:hparams.local_condition_dim])
-    local_condition = np.asarray(local_condition)
+    upsample_factor = audio.get_hop_size()
+
+    # Tc = local_condition.shape[0]
+    # length = Tc * upsample_factor
+    if hparams.upsample_conditional_features:
+        local_condition = np.repeat(local_condition, upsample_factor, axis=0)
 
     samples = tf.placeholder(tf.int32)
-    local_ph = tf.placeholder(tf.float32, shape=(1, hparams.local_condition_dim))
+    local_ph = tf.placeholder(tf.float32, shape=(1, hparams.num_mels))
 
-    next_sample = net.predict_proba_incremental(samples, local_ph)
+    next_sample = net.predict_proba_incremental(samples, local_ph, gc_id)
 
     sess.run(tf.global_variables_initializer())
     sess.run(net.init_ops)
@@ -135,7 +165,7 @@ def main():
     print('Restoring model from {}'.format(args.checkpoint))
     saver.restore(sess, args.checkpoint)
 
-    decode = mu_law_decode(samples, hparams.quantization_channels)
+    # decode = mu_law_decode(samples, hparams.quantization_channels)
 
     quantization_channels = hparams.quantization_channels
 
@@ -161,16 +191,21 @@ def main():
             sess.run(outputs, feed_dict={samples: x, local_ph: local_condition[i:i+1, :]})
         print('Done.')
 
+    if args.wav_seed:
+        begin_len = net.receptive_field
+    else:
+        begin_len = 0
+
     sample_len = local_condition.shape[0]
-    last_sample_timestamp = datetime.now()
-    for step in range(sample_len):
+    for step in tqdm(range(begin_len, sample_len)):
 
         outputs = [next_sample]
         outputs.extend(net.push_ops)
         window = waveform[-1]
 
-            # Run the WaveNet to predict the next sample.
-        prediction = sess.run(outputs, feed_dict={samples: window, local_ph: local_condition[step:step+1, :]})[0]
+        # Run the WaveNet to predict the next sample.
+        prediction = sess.run(outputs, feed_dict={samples: window,
+                                                  local_ph: local_condition[step:step+1, :]})[0]
 
         # Scale prediction distribution using temperature.
         np.seterr(divide='ignore')
@@ -184,27 +219,20 @@ def main():
             np.arange(quantization_channels), p=scaled_prediction)
         waveform.append(sample)
 
-        current_sample_timestamp = datetime.now()
-        time_since_print = current_sample_timestamp - last_sample_timestamp
-        if time_since_print.total_seconds() > 1.:
-            print('Sample {:3<d}/{:3<d}'.format(step + 1, sample_len),
-                  end='\r')
-            last_sample_timestamp = current_sample_timestamp
-
         # If we have partial writing, save the result so far.
         if (args.wav_out_path and args.save_every and
                         (step + 1) % args.save_every == 0):
-            out = sess.run(decode, feed_dict={samples: waveform})
+            out = P.inv_mulaw_quantize(np.array(waveform), quantization_channels)
             write_wav(out, hparams.sample_rate, args.wav_out_path)
 
             # Introduce a newline to clear the carriage return from the progress.
     print()
     # Save the result as a wav file.
     if args.wav_out_path:
-        out = sess.run(decode, feed_dict={samples: waveform})
+        out = P.inv_mulaw_quantize(np.array(waveform), quantization_channels)
         write_wav(out, hparams.sample_rate, args.wav_out_path)
 
-    print('Finished generating. The result can be viewed in TensorBoard.')
+    print('Finished generating.')
 
 
 if __name__ == '__main__':

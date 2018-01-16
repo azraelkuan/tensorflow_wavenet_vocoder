@@ -7,7 +7,6 @@ import time
 from datetime import datetime
 
 import tensorflow as tf
-from tqdm import tqdm
 
 from model import WaveNetModel, optimizer_factory
 from datasets.data_feeder import DataFeeder
@@ -16,19 +15,19 @@ from hparams import hparams
 
 # default parameters
 BATCH_SIZE = 1
-TRAIN_TXT = "/home/kc430/Downloads/training/train.txt"
+TRAIN_TXT = "./train.txt"
 LOGDIR_ROOT = './logdir'
-CHECKPOINT_EVERY = 1000
+CHECKPOINT_EVERY = 200
 NUM_STEPS = int(1e5)
 LEARNING_RATE = 1e-3
 STARTED_DATE_STRING = "{0:%Y-%m-%dT%H-%M-%S}".format(datetime.now())
-SAMPLE_SIZE = 50000
+SAMPLE_SIZE = 20000
 L2_REGULARIZATION_STRENGTH = 0
 EPSILON = 0.001
 MOMENTUM = 0.9
 MAX_TO_KEEP = 5
 METADATA = False
-PRINT_LOSS_EVERY = 500
+PRINT_LOSS_EVERY = 50
 
 
 def get_arguments():
@@ -85,6 +84,7 @@ def get_arguments():
                         help='Maximum amount of checkpoints that will be kept alive. Default: '
                              + str(MAX_TO_KEEP) + '.')
     parser.add_argument('--num_gpus', type=int, default=4, help="the number of gpu")
+    parser.add_argument('--hparams', type=str, default=None, help="the hparams")
     return parser.parse_args()
 
 
@@ -95,7 +95,7 @@ def save(saver, sess, logdir, step):
     sys.stdout.flush()
 
     if not os.path.exists(logdir):
-        os.makedirs(logdir)
+        os.makedirs(logdir, exist_ok=True)
 
     saver.save(sess, checkpoint_path, global_step=step)
     print('Done.')
@@ -192,6 +192,12 @@ def average_gradients(tower_grads):
 
 def main():
     args = get_arguments()
+    # override the hparams
+    if args.hparams is not None:
+        hparams.parse(args.hparams)
+    hparams.global_cardinality = None if hparams.global_cardinality == 0 else hparams.global_cardinality
+    hparams.global_channel = None if hparams.global_channel == 0 else hparams.global_channel
+    print(hparams)
 
     try:
         directories = validate_directories(args)
@@ -216,7 +222,10 @@ def main():
                 hparams.scalar_input,
                 hparams.initial_filter_width
             ),
-            sample_size=args.sample_size
+            gc_enable=hparams.gc_enable,
+            sample_size=args.sample_size,
+            npy_dataroot=hparams.NPY_DATAROOT,
+            num_mels=hparams.num_mels
         )
 
     net = WaveNetModel(
@@ -231,7 +240,9 @@ def main():
         scalar_input=hparams.scalar_input,
         initial_filter_width=hparams.initial_filter_width,
         histograms=args.histograms,
-        local_condition_channel=hparams.local_condition_dim
+        local_condition_channel=hparams.num_mels,
+        global_cardinality=hparams.global_cardinality,
+        global_channel=hparams.global_channel
     )
 
     if args.l2_regularization_strength == 0:
@@ -272,10 +283,17 @@ def main():
         momentum=args.momentum)
 
     mul_batch_size = args.batch_size*args.num_gpus
-    audio_batch, lc_batch = reader.dequeue(mul_batch_size)
-
+    if hparams.gc_enable:
+        audio_batch, lc_batch, gc_batch = reader.dequeue(mul_batch_size)
+    else:
+        audio_batch, lc_batch = reader.dequeue(mul_batch_size)
+        gc_batch = None
     split_audio_batch = tf.split(value=audio_batch, num_or_size_splits=args.num_gpus, axis=0)
     split_lc_batch = tf.split(value=lc_batch, num_or_size_splits=args.num_gpus, axis=0)
+    if hparams.gc_enable:
+        split_gc_batch = tf.split(value=gc_batch, num_or_size_splits=args.num_gpus, axis=0)
+    else:
+        split_gc_batch = [None for _ in range(args.num_gpus)]
 
     # support multi gpu train
     tower_grads = []
@@ -286,7 +304,8 @@ def main():
                 with tf.name_scope('losstower_{}'.format(i)) as scope:
                     loss = net.loss(input_batch=split_audio_batch[i],
                                     local_condtion=split_lc_batch[i],
-                                    l2_regularization_strength=args.l2_regularization_strength)
+                                    global_condition=split_gc_batch[i],
+                                    l2_regularization_strength=args.l2_regularization_strength, name=scope)
                     tf.get_variable_scope().reuse_variables()
                     tower_losses.append(loss)
                     grad_vars = optimizer.compute_gradients(loss, var_list=trainable)
@@ -310,7 +329,7 @@ def main():
     try:
         print_loss = 0.
         start_time = time.time()
-        for step in tqdm(range(saved_global_step, args.num_steps), desc="Step"):
+        for step in range(saved_global_step, args.num_steps):
 
             loss_value, _ = sess.run([loss, optim])
             # tqdm.write("{}".format(loss_value))
@@ -318,7 +337,7 @@ def main():
 
             if step % PRINT_LOSS_EVERY == 0:
                 duration = time.time() - start_time
-                tqdm.write('step {:d} - loss = {:.3f}, ({:.3f} sec/step)'.format(
+                print('step {:d} - loss = {:.3f}, ({:.3f} sec/step)'.format(
                     step, print_loss/PRINT_LOSS_EVERY, duration/PRINT_LOSS_EVERY))
                 start_time = time.time()
                 print_loss = 0.

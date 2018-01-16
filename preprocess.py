@@ -1,44 +1,49 @@
-# -*- coding: utf-8 -*-
-
 import argparse
 import os
 from multiprocessing import cpu_count
 from tqdm import tqdm
-from datasets import ljspeech
+import importlib
 from hparams import hparams
 
 
-def preprocess_ljspeech(args):
-    in_dir = os.path.join(args.base_dir, 'LJSpeech-1.0')
-    out_dir = os.path.join(args.base_dir, args.output)
+def preprocess(mod, in_dir, out_root, num_workers):
     os.makedirs(out_dir, exist_ok=True)
-    metadata = ljspeech.build_from_path(in_dir, out_dir, args.num_workers, tqdm=tqdm)
+    metadata = mod.build_from_path(in_dir, out_dir, hparams.silence_threshold, hparams.fft_size, tqdm=tqdm)
     write_metadata(metadata, out_dir)
 
 
 def write_metadata(metadata, out_dir):
-    with open(os.path.join(out_dir, 'train.txt'), 'w', encoding="utf-8") as f:
+    with open(os.path.join(out_dir, 'train.txt'), 'w', encoding='utf-8') as f:
         for m in metadata:
             f.write('|'.join([str(x) for x in m]) + '\n')
-    frames = sum(m[1] for m in metadata)
-    hours = frames * hparams.frame_period / (3600 * 1000)
-    print('Wrote %d utterances, %d frames (%.2f hours)' % (len(metadata), frames, hours))
-    print('Max input length:  %d' % max(len(m[0]) for m in metadata))
+    frames = sum([m[2] for m in metadata])
+    sr = hparams.sample_rate
+    hours = frames / sr / 3600
+    print('Wrote %d utterances, %d time steps (%.2f hours)' % (len(metadata), frames, hours))
+    print('Max input length:  %d' % max(len(m[3]) for m in metadata))
+    print('Max output length: %d' % max(m[2] for m in metadata))
 
 
-def main():
+if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--base_dir', default=os.path.expanduser('~/data'))
-    parser.add_argument('--output', default='training')
-    parser.add_argument('--dataset', required=True, choices=['ljspeech'])
-    parser.add_argument('--num_workers', type=int, default=cpu_count())
+    parser.add_argument('--name', type=str, default=None)
+    parser.add_argument('--in_dir', type=str, default=None)
+    parser.add_argument('--out_dir', type=str, default=None)
+    parser.add_argument('--num_workers', type=str, default=None)
+    parser.add_argument('--hparams', type=str, default=None)
     args = parser.parse_args()
-    if args.dataset == 'ljspeech':
-        preprocess_ljspeech(args)
 
+    hparams.parse(args.hparams)
+    print(hparams)
 
-if __name__ == '__main__':
-    main()
+    name = args.name
+    in_dir = args.in_dir
+    out_dir = args.out_dir
+    num_workers = args.num_workers
+    num_workers = cpu_count() if num_workers is None else int(num_workers)
 
+    print("Sampling frequency: {}".format(hparams.sample_rate))
 
-
+    assert name in ["cmu_arctic", "ljspeech", "xijunm"]
+    mod = importlib.import_module('datasets.{}'.format(name))
+    preprocess(mod, in_dir, out_dir, num_workers)
