@@ -3,7 +3,7 @@ import os
 from multiprocessing import cpu_count
 from tqdm import tqdm
 import importlib
-from hparams import hparams
+from hparams import hparams, hparams_debug_string
 
 
 def preprocess(mod, in_dir, out_root, num_workers):
@@ -33,8 +33,9 @@ if __name__ == "__main__":
     parser.add_argument('--hparams', type=str, default=None)
     args = parser.parse_args()
 
-    hparams.parse(args.hparams)
-    print(hparams)
+    if args.hparams is not None:
+        hparams.parse(args.hparams)
+    print(hparams_debug_string())
 
     name = args.name
     in_dir = args.in_dir
@@ -44,6 +45,6 @@ if __name__ == "__main__":
 
     print("Sampling frequency: {}".format(hparams.sample_rate))
 
-    assert name in ["cmu_arctic", "ljspeech", "xijunm"]
+    assert name in ["cmu_arctic", "ljspeech", "xijunm", 'sampler']
     mod = importlib.import_module('datasets.{}'.format(name))
     preprocess(mod, in_dir, out_dir, num_workers)

@@ -55,9 +55,10 @@ def _process_utterance(out_dir, index, wav_path, text, silence_threshold, fft_si
 
     timesteps = len(quantized)
 
+    wav_id = wav_path.split('/')[-1].split('.')[0]
     # Write the spectrograms to disk:
-    audio_filename = 'ljspeech-audio-%05d.npy' % index
-    mel_filename = 'ljspeech-mel-%05d.npy' % index
+    audio_filename = '{}-audio.npy'.format(wav_id)
+    mel_filename = '{}-mel.npy'.format(wav_id)
     np.save(os.path.join(out_dir, audio_filename),
             quantized.astype(np.int16), allow_pickle=False)
     np.save(os.path.join(out_dir, mel_filename),

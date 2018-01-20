@@ -10,7 +10,7 @@ import numpy as np
 import tensorflow as tf
 
 from model import WaveNetModel
-from hparams import hparams
+from hparams import hparams, hparams_debug_string
 import nnmnkwii.preprocessing as P
 
 from tqdm import tqdm
@@ -108,7 +108,7 @@ def main():
         hparams.parse(args.hparams)
     hparams.global_cardinality = None if hparams.global_cardinality == 0 else hparams.global_cardinality
     hparams.global_channel = None if hparams.global_channel == 0 else hparams.global_channel
-    print(hparams)
+    print(hparams_debug_string())
 
     sess = tf.Session(config=tf.ConfigProto(log_device_placement=False, gpu_options=tf.GPUOptions(allow_growth=True)))
 
@@ -191,13 +191,13 @@ def main():
             sess.run(outputs, feed_dict={samples: x, local_ph: local_condition[i:i+1, :]})
         print('Done.')
 
-    if args.wav_seed:
-        begin_len = net.receptive_field
-    else:
-        begin_len = 0
+    # if args.wav_seed:
+    #     begin_len = net.receptive_field
+    # else:
+    #     begin_len = 0
 
     sample_len = local_condition.shape[0]
-    for step in tqdm(range(begin_len, sample_len)):
+    for step in tqdm(range(0, sample_len)):
 
         outputs = [next_sample]
         outputs.extend(net.push_ops)

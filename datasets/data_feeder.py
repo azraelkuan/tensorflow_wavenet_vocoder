@@ -67,16 +67,17 @@ class DataFeeder(object):
             tf.placeholder(tf.float32, shape=None),
             tf.placeholder(tf.float32, shape=None)
         ]
-        self.queue = tf.PaddingFIFOQueue(self.queue_size,
-                                         [tf.float32, tf.float32],
-                                         shapes=[(None, 1), (None, self.num_mels)],
-                                         name='input_queue')
 
         if self.gc_enable:
             self._placeholders.append(tf.placeholder(tf.int32, shape=None))
             self.queue = tf.PaddingFIFOQueue(self.queue_size,
                                              [tf.float32, tf.float32, tf.int32],
                                              shapes=[(None, 1), (None, self.num_mels), ()],
+                                             name='input_queue')
+        else:
+            self.queue = tf.PaddingFIFOQueue(self.queue_size,
+                                             [tf.float32, tf.float32],
+                                             shapes=[(None, 1), (None, self.num_mels)],
                                              name='input_queue')
 
         self.enqueue = self.queue.enqueue(self._placeholders)

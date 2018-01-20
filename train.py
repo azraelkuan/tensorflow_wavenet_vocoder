@@ -10,7 +10,7 @@ import tensorflow as tf
 
 from model import WaveNetModel, optimizer_factory
 from datasets.data_feeder import DataFeeder
-from hparams import hparams
+from hparams import hparams, hparams_debug_string
 
 
 # default parameters
@@ -95,10 +95,10 @@ def save(saver, sess, logdir, step):
     sys.stdout.flush()
 
     if not os.path.exists(logdir):
-        os.makedirs(logdir, exist_ok=True)
+        os.makedirs(logdir)
 
     saver.save(sess, checkpoint_path, global_step=step)
-    print('Done.')
+    print(' Done.')
 
 
 def load(saver, sess, logdir):
@@ -197,7 +197,7 @@ def main():
         hparams.parse(args.hparams)
     hparams.global_cardinality = None if hparams.global_cardinality == 0 else hparams.global_cardinality
     hparams.global_channel = None if hparams.global_channel == 0 else hparams.global_channel
-    print(hparams)
+    print(hparams_debug_string())
 
     try:
         directories = validate_directories(args)
