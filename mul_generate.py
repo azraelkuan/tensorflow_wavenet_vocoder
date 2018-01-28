@@ -83,7 +83,8 @@ def get_arguments():
 
 def write_wav(waveform, sample_rate, filename):
     y = np.array(waveform)
-    librosa.output.write_wav(filename, y, sample_rate)
+    maxv = np.iinfo(np.int16).max
+    librosa.output.write_wav(filename, (y * maxv).astype(np.int16), sample_rate)
     print('Updated wav file at {}'.format(filename))
 
 
@@ -132,6 +133,8 @@ def main():
         scalar_input=hparams.scalar_input,
         initial_filter_width=hparams.initial_filter_width,
         local_condition_channel=hparams.num_mels,
+        upsample_conditional_features=hparams.upsample_conditional_features,
+        upsample_factor=hparams.upsample_factor,
         global_cardinality=hparams.global_cardinality,
         global_channel=hparams.global_channel
     )
@@ -157,9 +160,11 @@ def main():
             if line is not None:
                 line = line.strip().split('|')
                 npy_path = os.path.join(hparams.NPY_DATAROOT, line[1])
-                tmp_local_condition = np.load(npy_path)
+                tmp_local_condition = np.load(npy_path).astype(np.float32)
                 if len(line) == 5:
                     tmp_global_condition = int(line[4])
+                if hparams.global_channel is None:
+                    tmp_global_condition = None
                 generate_list.append((tmp_local_condition, tmp_global_condition, line[1]))
 
     for local_condition, global_condition, npy_path in generate_list:
@@ -169,9 +174,12 @@ def main():
         wav_id = npy_path.split('-mel')[0]
         wav_out_path = "wav/{}_gen.wav".format(wav_id)
 
-        if hparams.upsample_conditional_features:
+        if not hparams.upsample_conditional_features:
             local_condition = np.repeat(local_condition, upsample_factor, axis=0)
-
+        else:
+            local_condition = np.expand_dims(local_condition, 0)
+            local_condition = net._create_upsample(local_condition)
+            local_condition = tf.squeeze(local_condition, [0]).eval(session=sess)
         next_sample = net.predict_proba_incremental(samples, local_ph, global_condition)
         sess.run(net.init_ops)
 
@@ -207,7 +215,7 @@ def main():
             begin_len = 0
 
         sample_len = local_condition.shape[0]
-        for step in tqdm(range(begin_len, sample_len), mininterval=60):
+        for step in tqdm(range(begin_len, sample_len)):
 
             outputs = [next_sample]
             outputs.extend(net.push_ops)
@@ -242,6 +250,7 @@ def main():
         if wav_out_path:
 
             out = P.inv_mulaw_quantize(np.array(waveform).astype(np.int16), quantization_channels)
+
             #out = remove_noise(out)
             write_wav(out, hparams.sample_rate, wav_out_path)
         print('Finished generating.')

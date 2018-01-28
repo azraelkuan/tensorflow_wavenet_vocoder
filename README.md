@@ -11,6 +11,7 @@
 - [x] global condition
 - [x] multi speaker
 - [x] multi gpu
+- [ ] use conv1d transposed to upsample
 - [ ] Tacotron + Wavenet Vocoder 
 
 ## Required

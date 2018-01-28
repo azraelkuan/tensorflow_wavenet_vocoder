@@ -85,6 +85,7 @@ def get_arguments():
                              + str(MAX_TO_KEEP) + '.')
     parser.add_argument('--num_gpus', type=int, default=4, help="the number of gpu")
     parser.add_argument('--hparams', type=str, default=None, help="the hparams")
+    parser.add_argument('--speaker_id', type=int, default=None, help='the speaker id')
     return parser.parse_args()
 
 
@@ -115,10 +116,10 @@ def load(saver, sess, logdir):
         print("  Restoring...", end="")
         saver.restore(sess, ckpt.model_checkpoint_path)
         print(" Done.")
-        return global_step
+        return global_step, sess
     else:
         print(" No checkpoint found.")
-        return None
+        return None, sess
 
 
 def get_default_logdir(logdir_root):
@@ -225,7 +226,8 @@ def main():
             gc_enable=hparams.gc_enable,
             sample_size=args.sample_size,
             npy_dataroot=hparams.NPY_DATAROOT,
-            num_mels=hparams.num_mels
+            num_mels=hparams.num_mels,
+            speaker_id=args.speaker_id
         )
 
     net = WaveNetModel(
@@ -241,6 +243,8 @@ def main():
         initial_filter_width=hparams.initial_filter_width,
         histograms=args.histograms,
         local_condition_channel=hparams.num_mels,
+        upsample_conditional_features=hparams.upsample_conditional_features,
+        upsample_factor=hparams.upsample_factor,
         global_cardinality=hparams.global_cardinality,
         global_channel=hparams.global_channel
     )
@@ -250,24 +254,10 @@ def main():
 
     trainable = tf.trainable_variables()
 
-    sess = tf.Session(config=tf.ConfigProto(log_device_placement=False, allow_soft_placement=True,
-                                            gpu_options=tf.GPUOptions(allow_growth=True)))
-    saver = tf.train.Saver(var_list=tf.trainable_variables(), max_to_keep=args.max_checkpoints)
     # get global step
-    try:
-        saved_global_step = load(saver, sess, restore_from)
-        if is_overwritten_training or saved_global_step is None:
-            saved_global_step = 0
-    except:
-        print("Something went wrong while restoring checkpoint. "
-              "We will terminate training to avoid accidentally overwriting "
-              "the previous model.")
-        raise
-
     global_step = tf.get_variable(
         'global_step', [],
-        initializer=tf.constant_initializer(saved_global_step), trainable=False)
-
+        initializer=tf.constant_initializer(0), trainable=False)
     # decay learning rate
     # Calculate the learning rate schedule.
     decay_steps = hparams.NUM_STEPS_RATIO_PER_DECAY * args.num_steps
@@ -277,7 +267,6 @@ def main():
                                     decay_steps,
                                     hparams.LEARNING_RATE_DECAY_FACTOR,
                                     staircase=True)
-
     optimizer = optimizer_factory[args.optimizer](
         learning_rate=lr,
         momentum=args.momentum)
@@ -288,6 +277,7 @@ def main():
     else:
         audio_batch, lc_batch = reader.dequeue(mul_batch_size)
         gc_batch = None
+
     split_audio_batch = tf.split(value=audio_batch, num_or_size_splits=args.num_gpus, axis=0)
     split_lc_batch = tf.split(value=lc_batch, num_or_size_splits=args.num_gpus, axis=0)
     if hparams.gc_enable:
@@ -317,8 +307,23 @@ def main():
         avg_grad = average_gradients(tower_grads)
         optim = optimizer.apply_gradients(avg_grad, global_step=global_step)
 
+    # init the sess
+    sess = tf.Session(config=tf.ConfigProto(log_device_placement=False, allow_soft_placement=True,
+                                            gpu_options=tf.GPUOptions(allow_growth=True)))
     init = tf.global_variables_initializer()
     sess.run(init)
+
+    saver = tf.train.Saver(var_list=tf.trainable_variables(), max_to_keep=args.max_checkpoints)
+
+    try:
+        saved_global_step, sess = load(saver, sess, restore_from)
+        if is_overwritten_training or saved_global_step is None:
+            saved_global_step = 0
+    except:
+        print("Something went wrong while restoring checkpoint. "
+              "We will terminate training to avoid accidentally overwriting "
+              "the previous model.")
+        raise
 
     threads = tf.train.start_queue_runners(sess=sess, coord=coord)
     reader.start_threads(sess)

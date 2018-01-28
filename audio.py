@@ -77,6 +77,14 @@ def get_hop_size():
     return hop_size
 
 
+def upsample_conditional_features():
+    hop_size = hparams.hop_size
+    if hop_size is None:
+        assert hparams.frame_shift_ms is not None
+        hop_size = int(hparams.frame_shift_ms / 1000 * hparams.sample_rate)
+    return hop_size
+
+
 def _lws_processor():
     return lws.lws(hparams.fft_size, get_hop_size(), mode="speech")
 

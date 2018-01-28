@@ -25,10 +25,12 @@ hparams = tf.contrib.training.HParams(
     global_cardinality=7,  # speaker num
 
     filter_width=2,
-    dilations=[1, 2, 4, 8, 16, 32,
-               1, 2, 4, 8, 16, 32,
-               1, 2, 4, 8, 16, 32,
-               1, 2, 4, 8, 16, 32],
+    dilations=[1, 2, 4, 8, 16, 32, 64, 128,
+               1, 2, 4, 8, 16, 32, 64, 128],
+   #  dilations=[1, 2, 4, 8, 16, 32,
+               # 1, 2, 4, 8, 16, 32,
+               # 1, 2, 4, 8, 16, 32,
+               # 1, 2, 4, 8, 16, 32],
     residual_channels=256,
     dilation_channels=256,
     quantization_channels=256,
@@ -38,6 +40,7 @@ hparams = tf.contrib.training.HParams(
     initial_filter_width=32,
 
     upsample_conditional_features=True,
+    upsample_factor=16,
 
     LEARNING_RATE_DECAY_FACTOR=0.1,
     NUM_STEPS_RATIO_PER_DECAY=0.3,

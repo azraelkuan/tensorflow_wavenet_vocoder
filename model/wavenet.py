@@ -2,7 +2,6 @@
 
 import tensorflow as tf
 import numpy as np
-
 from .ops import causal_conv
 
 
@@ -40,6 +39,8 @@ class WaveNetModel(object):
                  initial_filter_width=32,
                  histograms=False,
                  local_condition_channel=None,
+                 upsample_conditional_features=None,
+                 upsample_factor=None,
                  global_cardinality=None,
                  global_channel=None):
         self.batch_size = batch_size
@@ -56,6 +57,8 @@ class WaveNetModel(object):
         self.local_condition_channel = local_condition_channel
         self.global_channel = global_channel
         self.global_cardinality = global_cardinality
+        self.upsample_conditional_features = upsample_conditional_features
+        self.upsample_factor = upsample_factor
 
         self.receptive_field = WaveNetModel.calculate_receptive_field(
             self.filter_width, self.dilations, self.scalar_input,
@@ -76,6 +79,17 @@ class WaveNetModel(object):
         var = dict()
 
         with tf.variable_scope('wavenet'):
+
+            if self.upsample_conditional_features is not None:
+                with tf.variable_scope('upsample_layer'):
+                    layer = dict()
+                    layer['upsample1'] = create_variable(
+                        'upsample1', [self.upsample_factor, self.filter_width, 1, 1]
+                    )
+                    layer['upsample2'] = create_variable(
+                        'upsample', [self.upsample_factor, self.filter_width, 1, 1]
+                    )
+                    var['upsample_layer'] = layer
 
             if self.global_cardinality is not None:
                 with tf.variable_scope('embeddings'):
@@ -356,6 +370,32 @@ class WaveNetModel(object):
 
         return skip_contribution, input_batch + transformed
 
+    def _create_upsample(self, local_condition_batch):
+        layer_filter = self.variables['upsample_layer']
+        local_condition_batch = tf.expand_dims(local_condition_batch, [3])
+        # local condition batch N H W C
+        batch_size = tf.shape(local_condition_batch)[0]
+        output_shape = tf.stack([batch_size, self.upsample_factor*tf.shape(local_condition_batch)[1],
+                                tf.shape(local_condition_batch)[2], 1])
+
+        local_condition_batch = tf.nn.conv2d_transpose(
+            local_condition_batch,
+            layer_filter['upsample1'],
+            strides=[1, self.upsample_factor, 1, 1],
+            output_shape=output_shape)
+
+        batch_size = tf.shape(local_condition_batch)[0]
+        output_shape = tf.stack([batch_size, self.upsample_factor * tf.shape(local_condition_batch)[1],
+                                tf.shape(local_condition_batch)[2], 1])
+        local_condition_batch = tf.nn.conv2d_transpose(
+            local_condition_batch,
+            layer_filter['upsample2'],
+            strides=[1, self.upsample_factor, 1, 1],
+            output_shape=output_shape
+        )
+        local_condition_batch = tf.squeeze(local_condition_batch, [3])
+        return local_condition_batch
+
     def _create_network(self, input_batch, local_condition_batch, global_condition_batch):
         """Construct the WaveNet network."""
         outputs = []
@@ -533,7 +573,6 @@ class WaveNetModel(object):
             encoded = tf.one_hot(waveform, self.quantization_channels)
             encoded = tf.reshape(encoded, [-1, self.quantization_channels])
             local_condition = tf.reshape(local_condition, [1, -1, self.local_condition_channel])
-            print(global_condition)
             gc_embedding = self._embed_gc(global_condition)
 
             raw_output = self._create_generator(encoded, local_condition, gc_embedding)
@@ -574,46 +613,54 @@ class WaveNetModel(object):
             else:
                 network_input = encoded
 
-            # Cut off the last sample of network input to preserve causality.
-            network_input_width = tf.shape(network_input)[1] - 1
-            network_input = tf.slice(network_input, [0, 0, 0],
-                                     [-1, network_input_width, -1])
+            if self.upsample_conditional_features is not None:
+                local_condtion = self._create_upsample(local_condtion)
 
-            raw_output = self._create_network(network_input, local_condtion, gc_embedding)
+            assert_op = tf.assert_equal(tf.shape(local_condtion)[1], tf.shape(encoded)[1],
+                                        data=[local_condtion, encoded], name='assert_equal')
 
-            with tf.name_scope('loss'):
-                # Cut off the samples corresponding to the receptive field
-                # for the first predicted sample.
-                target_output = tf.slice(
-                    tf.reshape(
-                        encoded,
-                        [self.batch_size, -1, self.quantization_channels]),
-                    [0, self.receptive_field, 0],
-                    [-1, -1, -1])
-                target_output = tf.reshape(target_output,
-                                           [-1, self.quantization_channels])
-                prediction = tf.reshape(raw_output,
-                                        [-1, self.quantization_channels])
-                loss = tf.nn.softmax_cross_entropy_with_logits(
-                    logits=prediction,
-                    labels=target_output)
-                reduced_loss = tf.reduce_mean(loss)
+            with tf.control_dependencies([assert_op]):
 
-                tf.summary.scalar('loss', reduced_loss)
+                # Cut off the last sample of network input to preserve causality.
+                network_input_width = tf.shape(network_input)[1] - 1
+                network_input = tf.slice(network_input, [0, 0, 0],
+                                         [-1, network_input_width, -1])
 
-                if l2_regularization_strength is None:
-                    return reduced_loss
-                else:
-                    # L2 regularization for all trainable parameters
-                    l2_loss = tf.add_n([tf.nn.l2_loss(v)
-                                        for v in tf.trainable_variables()
-                                        if not ('bias' in v.name)])
+                raw_output = self._create_network(network_input, local_condtion, gc_embedding)
 
-                    # Add the regularization term to the loss
-                    total_loss = (reduced_loss +
-                                  l2_regularization_strength * l2_loss)
+                with tf.name_scope('loss'):
+                    # Cut off the samples corresponding to the receptive field
+                    # for the first predicted sample.
+                    target_output = tf.slice(
+                        tf.reshape(
+                            encoded,
+                            [self.batch_size, -1, self.quantization_channels]),
+                        [0, self.receptive_field, 0],
+                        [-1, -1, -1])
+                    target_output = tf.reshape(target_output,
+                                               [-1, self.quantization_channels])
+                    prediction = tf.reshape(raw_output,
+                                            [-1, self.quantization_channels])
+                    loss = tf.nn.softmax_cross_entropy_with_logits(
+                        logits=prediction,
+                        labels=target_output)
+                    reduced_loss = tf.reduce_mean(loss)
 
-                    tf.summary.scalar('l2_loss', l2_loss)
-                    tf.summary.scalar('total_loss', total_loss)
+                    tf.summary.scalar('loss', reduced_loss)
 
-                    return total_loss
+                    if l2_regularization_strength is None:
+                        return reduced_loss
+                    else:
+                        # L2 regularization for all trainable parameters
+                        l2_loss = tf.add_n([tf.nn.l2_loss(v)
+                                            for v in tf.trainable_variables()
+                                            if not ('bias' in v.name)])
+
+                        # Add the regularization term to the loss
+                        total_loss = (reduced_loss +
+                                      l2_regularization_strength * l2_loss)
+
+                        tf.summary.scalar('l2_loss', l2_loss)
+                        tf.summary.scalar('total_loss', total_loss)
+
+                        return total_loss
