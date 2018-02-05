@@ -65,7 +65,7 @@ def load_npy_data(metadata_filename, npy_dataroot, speaker_id):
 
 class DataFeeder(object):
     def __init__(self, metadata_filename, coord, receptive_field, gc_enable=False,
-                 sample_size=None, queue_size=32, npy_dataroot=None, num_mels=None, speaker_id=None):
+                 sample_size=None, queue_size=128, npy_dataroot=None, num_mels=None, speaker_id=None):
         self.metadata_filename = metadata_filename
         self.coord = coord
         self.receptive_field = receptive_field
@@ -167,6 +167,8 @@ class DataFeeder(object):
                             local_condition_piece = local_condition[:(self.receptive_field + self.sample_size), :]
                             wav = wav[:self.sample_size, :]
                             local_condition = local_condition[:self.sample_size, :]
+                            assert len(wav_piece) == len(local_condition_piece)
+
                             if self.gc_enable:
                                 sess.run(self.enqueue, feed_dict=dict(zip(
                                             self._placeholders, (wav_piece, local_condition_piece, global_condition))))
@@ -174,7 +176,7 @@ class DataFeeder(object):
                                 sess.run(self.enqueue, feed_dict=dict(zip(
                                     self._placeholders, (wav_piece, local_condition_piece))))
 
-    def start_threads(self, sess, n_threads=1):
+    def start_threads(self, sess, n_threads=8):
         for _ in range(n_threads):
             thread = threading.Thread(target=self.thread_main, args=(sess,))
             thread.daemon = True  # Thread will close when parent quits.

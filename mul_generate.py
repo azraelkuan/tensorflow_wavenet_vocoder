@@ -43,21 +43,11 @@ def get_arguments():
         type=_ensure_positive_float,
         default=TEMPERATURE,
         help='Sampling temperature')
-    # parser.add_argument(
-    #     '--wav_out_path',
-    #     type=str,
-    #     default=None,
-    #     help='Path to output wav file')
     parser.add_argument(
         '--save_every',
         type=int,
         default=SAVE_EVERY,
         help='How many samples before saving in-progress wav')
-    parser.add_argument(
-        '--wav_seed',
-        type=str,
-        default=None,
-        help='The wav file to start generation from')
     parser.add_argument(
         '--eval_txt',
         type=str,
@@ -70,13 +60,6 @@ def get_arguments():
         default=None,
         help="the override hparams"
     )
-    # parser.add_argument(
-    #     '--gc_id',
-    #     type=int,
-    #     default=0,
-    #     help='the global condition'
-    # )
-
     arguments = parser.parse_args()
     return arguments
 
@@ -85,38 +68,17 @@ def write_wav(waveform, sample_rate, filename):
     y = np.array(waveform)
     maxv = np.iinfo(np.int16).max
     librosa.output.write_wav(filename, (y * maxv).astype(np.int16), sample_rate)
+    # librosa.output.write_wav(filename, y, sample_rate)
     print('Updated wav file at {}'.format(filename))
-
-
-def create_seed(filename,
-                sample_rate,
-                quantization_channels,
-                window_size):
-    audio, _ = librosa.load(filename, sr=sample_rate, mono=True)
-
-    # quantized = mu_law_encode(audio, quantization_channels)
-    quantized = P.mulaw_quantize(audio, quantization_channels)
-    cut_index = tf.cond(tf.size(quantized) < tf.constant(window_size),
-                        lambda: tf.size(quantized),
-                        lambda: tf.constant(window_size))
-
-    return quantized[:cut_index]
-
-
-def remove_noise(audio):
-    for i, x in enumerate(audio):
-        if x == -1.0:
-            audio[i-50:i+50] = 0.
-
-    return audio
 
 
 def main():
     args = get_arguments()
     if args.hparams is not None:
         hparams.parse(args.hparams)
-    hparams.global_cardinality = None if hparams.global_cardinality == 0 else hparams.global_cardinality
-    hparams.global_channel = None if hparams.global_channel == 0 else hparams.global_channel
+    if not hparams.gc_enable:
+        hparams.global_cardinality = None
+        hparams.global_channel = None
     print(hparams_debug_string())
 
     sess = tf.Session(config=tf.ConfigProto(log_device_placement=False, gpu_options=tf.GPUOptions(allow_growth=True)))
@@ -168,9 +130,6 @@ def main():
                 generate_list.append((tmp_local_condition, tmp_global_condition, line[1]))
 
     for local_condition, global_condition, npy_path in generate_list:
-        # print(local_condition)
-        # print(global_condition)
-        # print(npy_path)
         wav_id = npy_path.split('-mel')[0]
         wav_out_path = "wav/{}_gen.wav".format(wav_id)
 
@@ -178,44 +137,19 @@ def main():
             local_condition = np.repeat(local_condition, upsample_factor, axis=0)
         else:
             local_condition = np.expand_dims(local_condition, 0)
-            local_condition = net._create_upsample(local_condition)
+            local_condition = net.create_upsample(local_condition)
             local_condition = tf.squeeze(local_condition, [0]).eval(session=sess)
         next_sample = net.predict_proba_incremental(samples, local_ph, global_condition)
         sess.run(net.init_ops)
 
         quantization_channels = hparams.quantization_channels
 
-        if args.wav_seed:
-            seed = create_seed(args.wav_seed,
-                               hparams.sample_rate,
-                               quantization_channels,
-                               net.receptive_field)
-            waveform = sess.run(seed).tolist()
-        else:
-            # Silence with a single random sample at the end.
-            waveform = [quantization_channels / 2] * (net.receptive_field - 1)
-            waveform.append(np.random.randint(quantization_channels))
-
-        if args.wav_seed:
-            outputs = [next_sample]
-            outputs.extend(net.push_ops)
-
-            print('Priming generation...')
-            for i, x in enumerate(waveform[-net.receptive_field: -1]):
-                if i % 100 == 0:
-                    print('Priming sample {}'.format(i))
-                sess.run(outputs, feed_dict={
-                    samples: x,
-                    local_ph: local_condition[i:i+1, :]})
-            print('Done.')
-
-        if args.wav_seed:
-            begin_len = net.receptive_field
-        else:
-            begin_len = 0
+        # Silence with a single random sample at the end.
+        waveform = [quantization_channels / 2] * (net.receptive_field - 1)
+        waveform.append(np.random.randint(quantization_channels))
 
         sample_len = local_condition.shape[0]
-        for step in tqdm(range(begin_len, sample_len)):
+        for step in tqdm(range(0, sample_len)):
 
             outputs = [next_sample]
             outputs.extend(net.push_ops)
@@ -233,7 +167,7 @@ def main():
                                  np.logaddexp.reduce(scaled_prediction))
             scaled_prediction = np.exp(scaled_prediction)
             np.seterr(divide='warn')
-
+            #print(quantization_channels, scaled_prediction)
             sample = np.random.choice(
                 np.arange(quantization_channels), p=scaled_prediction)
             waveform.append(sample)
@@ -248,12 +182,10 @@ def main():
         print()
         # Save the result as a wav file.
         if wav_out_path:
-
             out = P.inv_mulaw_quantize(np.array(waveform).astype(np.int16), quantization_channels)
-
-            #out = remove_noise(out)
+            # out = P.inv_mulaw_quantize(np.asarray(waveform), quantization_channels)
             write_wav(out, hparams.sample_rate, wav_out_path)
-        print('Finished generating.')
+    print('Finished generating.')
 
 
 if __name__ == '__main__':

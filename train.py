@@ -196,8 +196,9 @@ def main():
     # override the hparams
     if args.hparams is not None:
         hparams.parse(args.hparams)
-    hparams.global_cardinality = None if hparams.global_cardinality == 0 else hparams.global_cardinality
-    hparams.global_channel = None if hparams.global_channel == 0 else hparams.global_channel
+    if not hparams.gc_enable:
+        hparams.global_cardinality = None
+        hparams.global_channel = None
     print(hparams_debug_string())
 
     try:
@@ -258,6 +259,7 @@ def main():
     global_step = tf.get_variable(
         'global_step', [],
         initializer=tf.constant_initializer(0), trainable=False)
+
     # decay learning rate
     # Calculate the learning rate schedule.
     decay_steps = hparams.NUM_STEPS_RATIO_PER_DECAY * args.num_steps
@@ -267,6 +269,7 @@ def main():
                                     decay_steps,
                                     hparams.LEARNING_RATE_DECAY_FACTOR,
                                     staircase=True)
+
     optimizer = optimizer_factory[args.optimizer](
         learning_rate=lr,
         momentum=args.momentum)
@@ -293,7 +296,7 @@ def main():
             with tf.device('/gpu:{}'.format(i)):
                 with tf.name_scope('losstower_{}'.format(i)) as scope:
                     loss = net.loss(input_batch=split_audio_batch[i],
-                                    local_condtion=split_lc_batch[i],
+                                    local_condition=split_lc_batch[i],
                                     global_condition=split_gc_batch[i],
                                     l2_regularization_strength=args.l2_regularization_strength, name=scope)
                     tf.get_variable_scope().reuse_variables()
@@ -306,6 +309,13 @@ def main():
         loss = tf.reduce_mean(tower_losses)
         avg_grad = average_gradients(tower_grads)
         optim = optimizer.apply_gradients(avg_grad, global_step=global_step)
+
+    # Track the moving averages of all trainable variables.
+    variable_averages = tf.train.ExponentialMovingAverage(
+        hparams.MOVING_AVERAGE_DECAY, global_step)
+    variables_averages_op = variable_averages.apply(tf.trainable_variables())
+
+    train_op = tf.group(optim, variables_averages_op)
 
     # init the sess
     sess = tf.Session(config=tf.ConfigProto(log_device_placement=False, allow_soft_placement=True,
@@ -336,8 +346,8 @@ def main():
         start_time = time.time()
         for step in range(saved_global_step, args.num_steps):
 
-            loss_value, _ = sess.run([loss, optim])
-            # tqdm.write("{}".format(loss_value))
+            loss_value, _ = sess.run([loss, train_op])
+
             print_loss += loss_value
 
             if step % PRINT_LOSS_EVERY == 0:

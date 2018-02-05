@@ -39,7 +39,7 @@ class WaveNetModel(object):
                  initial_filter_width=32,
                  histograms=False,
                  local_condition_channel=None,
-                 upsample_conditional_features=None,
+                 upsample_conditional_features=True,
                  upsample_factor=None,
                  global_cardinality=None,
                  global_channel=None):
@@ -80,15 +80,12 @@ class WaveNetModel(object):
 
         with tf.variable_scope('wavenet'):
 
-            if self.upsample_conditional_features is not None:
+            if self.upsample_conditional_features:
                 with tf.variable_scope('upsample_layer'):
                     layer = dict()
-                    layer['upsample1'] = create_variable(
-                        'upsample1', [self.upsample_factor, self.filter_width, 1, 1]
-                    )
-                    layer['upsample2'] = create_variable(
-                        'upsample', [self.upsample_factor, self.filter_width, 1, 1]
-                    )
+                    for i in range(len(self.upsample_factor)):
+                        layer['upsample{}'.format(i)] = \
+                            create_variable('upsample{}'.format(i), [self.upsample_factor[i], self.filter_width, 1, 1])
                     var['upsample_layer'] = layer
 
             if self.global_cardinality is not None:
@@ -370,29 +367,23 @@ class WaveNetModel(object):
 
         return skip_contribution, input_batch + transformed
 
-    def _create_upsample(self, local_condition_batch):
+    def create_upsample(self, local_condition_batch):
         layer_filter = self.variables['upsample_layer']
         local_condition_batch = tf.expand_dims(local_condition_batch, [3])
         # local condition batch N H W C
         batch_size = tf.shape(local_condition_batch)[0]
-        output_shape = tf.stack([batch_size, self.upsample_factor*tf.shape(local_condition_batch)[1],
-                                tf.shape(local_condition_batch)[2], 1])
+        upsample_dim = tf.shape(local_condition_batch)[1]
 
-        local_condition_batch = tf.nn.conv2d_transpose(
-            local_condition_batch,
-            layer_filter['upsample1'],
-            strides=[1, self.upsample_factor, 1, 1],
-            output_shape=output_shape)
+        for i in range(len(self.upsample_factor)):
+            upsample_dim = upsample_dim * self.upsample_factor[i]
+            output_shape = tf.stack([batch_size, upsample_dim, tf.shape(local_condition_batch)[2], 1])
+            local_condition_batch = tf.nn.conv2d_transpose(
+                local_condition_batch,
+                layer_filter['upsample{}'.format(i)],
+                strides=[1, self.upsample_factor[i], 1, 1],
+                output_shape=output_shape
+            )
 
-        batch_size = tf.shape(local_condition_batch)[0]
-        output_shape = tf.stack([batch_size, self.upsample_factor * tf.shape(local_condition_batch)[1],
-                                tf.shape(local_condition_batch)[2], 1])
-        local_condition_batch = tf.nn.conv2d_transpose(
-            local_condition_batch,
-            layer_filter['upsample2'],
-            strides=[1, self.upsample_factor, 1, 1],
-            output_shape=output_shape
-        )
         local_condition_batch = tf.squeeze(local_condition_batch, [3])
         return local_condition_batch
 
@@ -587,7 +578,7 @@ class WaveNetModel(object):
 
     def loss(self,
              input_batch,
-             local_condtion=None,
+             local_condition=None,
              global_condition=None,
              l2_regularization_strength=None,
              name='wavenet'):
@@ -613,11 +604,11 @@ class WaveNetModel(object):
             else:
                 network_input = encoded
 
-            if self.upsample_conditional_features is not None:
-                local_condtion = self._create_upsample(local_condtion)
+            if self.upsample_conditional_features:
+                local_condition = self.create_upsample(local_condition)
 
-            assert_op = tf.assert_equal(tf.shape(local_condtion)[1], tf.shape(encoded)[1],
-                                        data=[local_condtion, encoded], name='assert_equal')
+            assert_op = tf.assert_equal(tf.shape(local_condition)[1], tf.shape(encoded)[1],
+                                        data=[local_condition, encoded], name='assert_equal')
 
             with tf.control_dependencies([assert_op]):
 
@@ -626,7 +617,7 @@ class WaveNetModel(object):
                 network_input = tf.slice(network_input, [0, 0, 0],
                                          [-1, network_input_width, -1])
 
-                raw_output = self._create_network(network_input, local_condtion, gc_embedding)
+                raw_output = self._create_network(network_input, local_condition, gc_embedding)
 
                 with tf.name_scope('loss'):
                     # Cut off the samples corresponding to the receptive field
