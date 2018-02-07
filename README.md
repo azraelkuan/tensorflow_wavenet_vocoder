@@ -12,7 +12,6 @@
 - [x] multi speaker
 - [x] multi gpu
 - [x] use conv1d transposed to upsample
-- [ ] mixture logistic distribution (doing..)
 - [ ] Tacotron + Wavenet Vocoder 
 
 ## Required
@@ -45,7 +44,7 @@ for train faster, we should process the data to npy
 ### Synthesize 
 #### for single speaker
 the eval_txt is extracted from the train_txt
->`python mul_generate.py --eval_txt /your_eval_txt/ --wav_out_path test_ljspeech.wav /your_cheakpoint/ ---hparams gc_enable=False,global_channel=0,global_cardinality=0,NPY_DATAROOT=/your_npy_datadir/,sample_rate=22050`
+>`python generate.py --eval_txt /your_eval_txt/ --wav_out_path test_ljspeech.wav /your_cheakpoint/ ---hparams gc_enable=False,global_channel=0,global_cardinality=0,NPY_DATAROOT=/your_npy_datadir/,sample_rate=22050`
 
 #### for multi speaker
-> `python mul_generate.py --eval_txt /your_eval_txt/ --wav_out_path test_arctic.wav /your_checkpoint/ --gc_id 6`
+> `python generate.py --eval_txt /your_eval_txt/ --wav_out_path test_arctic.wav /your_checkpoint/ --gc_id 6`

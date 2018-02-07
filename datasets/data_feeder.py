@@ -168,7 +168,6 @@ class DataFeeder(object):
                             wav = wav[:self.sample_size, :]
                             local_condition = local_condition[:self.sample_size, :]
                             assert len(wav_piece) == len(local_condition_piece)
-
                             if self.gc_enable:
                                 sess.run(self.enqueue, feed_dict=dict(zip(
                                             self._placeholders, (wav_piece, local_condition_piece, global_condition))))
@@ -176,7 +175,7 @@ class DataFeeder(object):
                                 sess.run(self.enqueue, feed_dict=dict(zip(
                                     self._placeholders, (wav_piece, local_condition_piece))))
 
-    def start_threads(self, sess, n_threads=8):
+    def start_threads(self, sess, n_threads=16):
         for _ in range(n_threads):
             thread = threading.Thread(target=self.thread_main, args=(sess,))
             thread.daemon = True  # Thread will close when parent quits.

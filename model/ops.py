@@ -52,7 +52,7 @@ def causal_conv(value, filter_, dilation, name='causal_conv'):
                                 padding='VALID')
             restored = batch_to_time(conv, dilation)
         else:
-            restored = tf.nn.conv1d(value, filter_, stride=1, padding='VALID')
+            restored = tf.nn.conv1d(value, filter_, stride=1, padding='SAME')
         # Remove excess elements at the end.
         out_width = tf.shape(value)[1] - (filter_width - 1) * dilation
         result = tf.slice(restored,

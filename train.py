@@ -12,16 +12,15 @@ from model import WaveNetModel, optimizer_factory
 from datasets.data_feeder import DataFeeder
 from hparams import hparams, hparams_debug_string
 
-
 # default parameters
 BATCH_SIZE = 1
 TRAIN_TXT = "./train.txt"
 LOGDIR_ROOT = './logdir'
 CHECKPOINT_EVERY = 200
 NUM_STEPS = int(1e5)
-LEARNING_RATE = 1e-3
+LEARNING_RATE = 1e-4
 STARTED_DATE_STRING = "{0:%Y-%m-%dT%H-%M-%S}".format(datetime.now())
-SAMPLE_SIZE = 20000
+SAMPLE_SIZE = 8000
 L2_REGULARIZATION_STRENGTH = 0
 EPSILON = 0.001
 MOMENTUM = 0.9
@@ -31,7 +30,6 @@ PRINT_LOSS_EVERY = 50
 
 
 def get_arguments():
-
     parser = argparse.ArgumentParser(description='WaveNet example network')
     parser.add_argument('--batch_size', type=int, default=BATCH_SIZE,
                         help='How many wav files to process at once. Default: ' + str(BATCH_SIZE) + '.')
@@ -39,24 +37,24 @@ def get_arguments():
                         help='The directory containing the VCTK corpus.')
     parser.add_argument('--store_metadata', type=bool, default=METADATA,
                         help='Whether to store advanced debugging information '
-                        '(execution time, memory consumption) for use with '
-                        'TensorBoard. Default: ' + str(METADATA) + '.')
+                             '(execution time, memory consumption) for use with '
+                             'TensorBoard. Default: ' + str(METADATA) + '.')
     parser.add_argument('--logdir', type=str, default=None,
                         help='Directory in which to store the logging '
-                        'information for TensorBoard. '
-                        'If the model already exists, it will restore '
-                        'the state and will continue training. '
-                        'Cannot use with --logdir_root and --restore_from.')
+                             'information for TensorBoard. '
+                             'If the model already exists, it will restore '
+                             'the state and will continue training. '
+                             'Cannot use with --logdir_root and --restore_from.')
     parser.add_argument('--logdir_root', type=str, default=None,
                         help='Root directory to place the logging '
-                        'output and generated model. These are stored '
-                        'under the dated subdirectory of --logdir_root. '
-                        'Cannot use with --logdir.')
+                             'output and generated model. These are stored '
+                             'under the dated subdirectory of --logdir_root. '
+                             'Cannot use with --logdir.')
     parser.add_argument('--restore_from', type=str, default=None,
                         help='Directory in which to restore the model from. '
-                        'This creates the new model under the dated directory '
-                        'in --logdir_root. '
-                        'Cannot use with --logdir.')
+                             'This creates the new model under the dated directory '
+                             'in --logdir_root. '
+                             'Cannot use with --logdir.')
     parser.add_argument('--checkpoint_every', type=int,
                         default=CHECKPOINT_EVERY,
                         help='How many steps to save each checkpoint after. Default: ' + str(CHECKPOINT_EVERY) + '.')
@@ -66,18 +64,18 @@ def get_arguments():
                         help='Learning rate for training. Default: ' + str(LEARNING_RATE) + '.')
     parser.add_argument('--sample_size', type=int, default=SAMPLE_SIZE,
                         help='Concatenate and cut audio samples to this many '
-                        'samples. Default: ' + str(SAMPLE_SIZE) + '.')
+                             'samples. Default: ' + str(SAMPLE_SIZE) + '.')
     parser.add_argument('--l2_regularization_strength', type=float,
                         default=L2_REGULARIZATION_STRENGTH,
                         help='Coefficient in the L2 regularization. '
-                        'Default: False')
+                             'Default: False')
     parser.add_argument('--optimizer', type=str, default='adam',
                         choices=optimizer_factory.keys(),
                         help='Select the optimizer specified by this option. Default: adam.')
     parser.add_argument('--momentum', type=float,
                         default=MOMENTUM, help='Specify the momentum to be '
-                        'used by sgd or rmsprop optimizer. Ignored by the '
-                        'adam optimizer. Default: ' + str(MOMENTUM) + '.')
+                                               'used by sgd or rmsprop optimizer. Ignored by the '
+                                               'adam optimizer. Default: ' + str(MOMENTUM) + '.')
     parser.add_argument('--histograms', type=bool, default=False,
                         help='Whether to store histogram summaries. Default: False')
     parser.add_argument('--max_checkpoints', type=int, default=MAX_TO_KEEP,
@@ -196,9 +194,8 @@ def main():
     # override the hparams
     if args.hparams is not None:
         hparams.parse(args.hparams)
-    if not hparams.gc_enable:
-        hparams.global_cardinality = None
-        hparams.global_channel = None
+    hparams.global_cardinality = None if hparams.global_cardinality == 0 else hparams.global_cardinality
+    hparams.global_channel = None if hparams.global_channel == 0 else hparams.global_channel
     print(hparams_debug_string())
 
     try:
@@ -220,9 +217,7 @@ def main():
             coord=coord,
             receptive_field=WaveNetModel.calculate_receptive_field(
                 hparams.filter_width,
-                hparams.dilations,
-                hparams.scalar_input,
-                hparams.initial_filter_width
+                hparams.dilations
             ),
             gc_enable=hparams.gc_enable,
             sample_size=args.sample_size,
@@ -238,10 +233,9 @@ def main():
         residual_channels=hparams.residual_channels,
         dilation_channels=hparams.dilation_channels,
         skip_channels=hparams.skip_channels,
-        quantization_channels=hparams.quantization_channels,
+        out_channels=hparams.out_channels,
         use_biases=hparams.use_biases,
         scalar_input=hparams.scalar_input,
-        initial_filter_width=hparams.initial_filter_width,
         histograms=args.histograms,
         local_condition_channel=hparams.num_mels,
         upsample_conditional_features=hparams.upsample_conditional_features,
@@ -262,19 +256,19 @@ def main():
 
     # decay learning rate
     # Calculate the learning rate schedule.
-    decay_steps = hparams.NUM_STEPS_RATIO_PER_DECAY * args.num_steps
-    # Decay the learning rate exponentially based on the number of steps.
-    lr = tf.train.exponential_decay(args.learning_rate,
-                                    global_step,
-                                    decay_steps,
-                                    hparams.LEARNING_RATE_DECAY_FACTOR,
-                                    staircase=True)
+    # decay_steps = hparams.NUM_STEPS_RATIO_PER_DECAY * args.num_steps
+    # # Decay the learning rate exponentially based on the number of steps.
+    # lr = tf.train.exponential_decay(args.learning_rate,
+    #                                 global_step,
+    #                                 decay_steps,
+    #                                 hparams.LEARNING_RATE_DECAY_FACTOR,
+    #                                 staircase=True)
 
     optimizer = optimizer_factory[args.optimizer](
-        learning_rate=lr,
+        learning_rate=args.learning_rate,
         momentum=args.momentum)
 
-    mul_batch_size = args.batch_size*args.num_gpus
+    mul_batch_size = args.batch_size * args.num_gpus
     if hparams.gc_enable:
         audio_batch, lc_batch, gc_batch = reader.dequeue(mul_batch_size)
     else:
@@ -319,7 +313,7 @@ def main():
 
     # init the sess
     sess = tf.Session(config=tf.ConfigProto(log_device_placement=False, allow_soft_placement=True,
-                                            gpu_options=tf.GPUOptions(allow_growth=True)))
+                                                       gpu_options=tf.GPUOptions(allow_growth=True)))
     init = tf.global_variables_initializer()
     sess.run(init)
 
@@ -353,7 +347,7 @@ def main():
             if step % PRINT_LOSS_EVERY == 0:
                 duration = time.time() - start_time
                 print('step {:d} - loss = {:.3f}, ({:.3f} sec/step)'.format(
-                    step, print_loss/PRINT_LOSS_EVERY, duration/PRINT_LOSS_EVERY))
+                    step, print_loss / PRINT_LOSS_EVERY, duration / PRINT_LOSS_EVERY))
                 start_time = time.time()
                 print_loss = 0.
 
@@ -372,4 +366,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
