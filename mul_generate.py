@@ -167,7 +167,7 @@ def main():
                                  np.logaddexp.reduce(scaled_prediction))
             scaled_prediction = np.exp(scaled_prediction)
             np.seterr(divide='warn')
-            #print(quantization_channels, scaled_prediction)
+            # print(quantization_channels, scaled_prediction)
             sample = np.random.choice(
                 np.arange(quantization_channels), p=scaled_prediction)
             waveform.append(sample)

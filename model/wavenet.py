@@ -33,7 +33,7 @@ class WaveNetModel(object):
                  residual_channels,
                  dilation_channels,
                  skip_channels,
-                 quantization_channels=2**8,
+                 quantization_channels=2 ** 8,
                  use_biases=False,
                  scalar_input=False,
                  initial_filter_width=32,
@@ -212,18 +212,24 @@ class WaveNetModel(object):
         if local_condition_batch is not None:
             weights_lc_filter = variables['lc_filter_weights']
             local_filter = tf.nn.conv1d(local_condition_batch,
-                                                     weights_lc_filter,
-                                                     stride=1,
-                                                     padding="SAME",
-                                                     name="lc_filter")
+                                        weights_lc_filter,
+                                        stride=1,
+                                        padding="SAME",
+                                        name="lc_filter")
             weights_lc_gate = variables['lc_gate_weights']
             local_gate = tf.nn.conv1d(local_condition_batch,
-                                                 weights_lc_gate,
-                                                 stride=1,
-                                                 padding="SAME",
-                                                 name="lc_gate")
-            local_filter = tf.slice(local_filter, [0, 0, 0], [-1, tf.shape(conv_filter)[1], -1])
-            local_gate = tf.slice(local_gate, [0, 0, 0], [-1, tf.shape(conv_gate)[1], -1])
+                                      weights_lc_gate,
+                                      stride=1,
+                                      padding="SAME",
+                                      name="lc_gate")
+
+            is_cut = tf.greater(tf.shape(local_filter)[1], tf.shape(conv_filter)[1])
+            local_filter = tf.cond(is_cut,
+                                   lambda: tf.slice(local_filter, [0, 0, 0], [-1, tf.shape(conv_filter)[1], -1]),
+                                   lambda: local_filter)
+            local_gate = tf.cond(is_cut, lambda: tf.slice(local_gate, [0, 0, 0], [-1, tf.shape(conv_gate)[1], -1]),
+                                 lambda: local_gate)
+
             conv_filter += local_filter
             conv_gate += local_gate
 
