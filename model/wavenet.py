@@ -314,21 +314,23 @@ class WaveNetModel(object):
         if local_condition is not None:
             weights_lc_filter = variables['lc_filter_weights']
             weights_lc_gate = variables['lc_gate_weights']
-            local_filter = tf.nn.conv1d(local_condition,
-                                        weights_lc_filter,
-                                        padding='SAME',
-                                        stride=1)
-            local_gate = tf.nn.conv1d(local_condition,
-                                      weights_lc_gate,
-                                      padding='SAME',
-                                      stride=1)
-            local_filter = tf.squeeze(local_filter, [1])
-            local_gate = tf.squeeze(local_gate, [1])
+            # local_filter = tf.nn.conv1d(local_condition,
+            #                             weights_lc_filter,
+            #                             padding='SAME',
+            #                             stride=1)
+            # local_gate = tf.nn.conv1d(local_condition,
+            #                           weights_lc_gate,
+            #                           padding='SAME',
+            #                           stride=1)
+            local_filter = tf.matmul(local_condition, weights_lc_filter[0, :, :])
+            local_gate = tf.matmul(local_condition, weights_lc_gate[0, :, :])
+
+            # local_filter = tf.squeeze(local_filter, [1])
+            # local_gate = tf.squeeze(local_gate, [1])
             output_filter += local_filter
             output_gate += local_gate
         if global_condition is not None:
-            global_condition = tf.reshape(global_condition, shape=(1, 1, -1))
-
+            global_condition = tf.reshape(global_condition, shape=(1, -1))
             weights_gc_filter = variables['gc_filter_weights']
             # weights_gc_filter = weights_gc_filter[0, :, :]
             # output_filter += tf.matmul(global_condition, weights_gc_filter)
@@ -336,16 +338,19 @@ class WaveNetModel(object):
             weights_gc_gate = variables['gc_gate_weights']
             # weights_gc_gate = weights_gc_gate[0, :, :]
             # output_gate += tf.matmul(global_condition, weights_gc_gate)
-            global_filter = tf.nn.conv1d(global_condition,
-                                         weights_gc_filter,
-                                         padding='SAME',
-                                         stride=1)
-            global_gate = tf.nn.conv1d(global_condition,
-                                       weights_gc_gate,
-                                       padding='SAME',
-                                       stride=1)
-            global_filter = tf.squeeze(global_filter, [1])
-            global_gate = tf.squeeze(global_gate, [1])
+            # global_filter = tf.nn.conv1d(global_condition,
+            #                              weights_gc_filter,
+            #                              padding='SAME',
+            #                              stride=1)
+            # global_gate = tf.nn.conv1d(global_condition,
+            #                            weights_gc_gate,
+            #                            padding='SAME',
+            #                            stride=1)
+            # global_filter = tf.squeeze(global_filter, [1])
+            # global_gate = tf.squeeze(global_gate, [1])
+            global_filter = tf.matmul(global_condition, weights_gc_filter[0, :, :])
+            global_gate = tf.matmul(global_condition, weights_gc_gate[0, :, :])
+
             output_filter += global_filter
             output_gate += global_gate
 
@@ -602,7 +607,7 @@ class WaveNetModel(object):
                 encoded = tf.one_hot(waveform, self.out_channels)
                 encoded = tf.reshape(encoded, [-1, self.out_channels])
 
-            local_condition = tf.reshape(local_condition, [1, -1, self.local_condition_channel])
+            local_condition = tf.reshape(local_condition, [-1, self.local_condition_channel])
             gc_embedding = self._embed_gc(global_condition)
 
             raw_output = self._create_generator(encoded, local_condition, gc_embedding)

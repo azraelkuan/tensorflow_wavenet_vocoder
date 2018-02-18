@@ -183,12 +183,12 @@ def main():
 
             # Scale prediction distribution using temperature.
             if hparams.scalar_input:
-                waveform.append(prediction[-1])
-                # print(prediction[-1])
+                # print(prediction)
                 # input()
-                if abs(prediction[-1]) > 0.01:
-                    print(prediction[-1])
-                # print(prediction[0])
+                waveform.append(prediction[-1])
+                print(prediction[-1])
+                # if abs(prediction[-1]) > 0.1:
+                #     print(prediction[-1])
             else:
                 np.seterr(divide='ignore')
                 scaled_prediction = np.log(prediction) / args.temperature
