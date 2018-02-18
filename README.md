@@ -1,10 +1,11 @@
 # an implement of wavenet vocoder using tensorflow
 
-> i am not good at tensorflow, so the code is not much good
-
 **!!! the audio code is copied from [wavenet_vocoder](https://github.com/r9y9/wavenet_vocoder) !!!**
 
 **!!! the main tensorflow model is fixed from [tensorflow-wavenet](https://github.com/ibab/tensorflow-wavenet/) !!!**
+
+***## Some issue
+mixture is in the branch of dev, but there are some bugs in generating wavs.
 
 ## To Do
 - [x] local condition
