@@ -5,7 +5,7 @@
 **!!! the main tensorflow model is fixed from [tensorflow-wavenet](https://github.com/ibab/tensorflow-wavenet/) !!!**
 
 ***## Some issue
-mixture is in the branch of dev, but there are some bugs in generating wavs.
+**mixture is in the branch of dev, but there are some bugs in generating wavs.**
 
 ## To Do
 - [x] local condition
