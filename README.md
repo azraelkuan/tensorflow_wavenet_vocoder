@@ -1,10 +1,11 @@
 # an implement of wavenet vocoder using tensorflow
 
-> i am not good at tensorflow, so the code is not much good
-
 **!!! the audio code is copied from [wavenet_vocoder](https://github.com/r9y9/wavenet_vocoder) !!!**
 
 **!!! the main tensorflow model is fixed from [tensorflow-wavenet](https://github.com/ibab/tensorflow-wavenet/) !!!**
+
+***## Some issue
+**mixture is in the branch of dev, but there are some bugs in generating wavs.**
 
 ## To Do
 - [x] local condition
@@ -47,4 +48,8 @@ the eval_txt is extracted from the train_txt
 >`python generate.py --eval_txt /your_eval_txt/ --wav_out_path test_ljspeech.wav /your_cheakpoint/ ---hparams gc_enable=False,global_channel=0,global_cardinality=0,NPY_DATAROOT=/your_npy_datadir/,sample_rate=22050`
 
 #### for multi speaker
+<<<<<<< HEAD
 > `python generate.py --eval_txt /your_eval_txt/ --wav_out_path test_arctic.wav /your_checkpoint/ --gc_id 6`
+=======
+> `python mul_generate.py --eval_txt /your_eval_txt/ --wav_out_path test_arctic.wav /your_checkpoint/ --gc_id 6`
+>>>>>>> 44b4f5ab08eb4869ac396e50ce2646cff73d7f1a
